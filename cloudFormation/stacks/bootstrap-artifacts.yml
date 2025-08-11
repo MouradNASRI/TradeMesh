@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Bootstrap - KMS + S3 artifact bucket (versioned, SSE-KMS, TLS-only)
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: Globally-unique S3 bucket name for CI/CD artifacts
+  NamePrefix:
+    Type: String
+    Default: trd
+  EnableVersioning:
+    Type: String
+    AllowedValues: [Enabled, Suspended]
+    Default: Enabled
+
+Resources:
+  ArtifactKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub '${NamePrefix} CI/CD artifacts CMK'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          # Admins in this account can manage the key
+          - Sid: AllowRootAccountAdmin
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          # Allow principals in this account to use the key (grant usage; IAM policies will further scope)
+          - Sid: AllowAccountUseOfKey
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: '*'
+      Tags:
+        - { Key: Name, Value: !Sub '${NamePrefix}-artifacts-kms' }
+
+  ArtifactKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${NamePrefix}-artifacts'
+      TargetKeyId: !Ref ArtifactKey
+
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      VersioningConfiguration:
+        Status: !Ref EnableVersioning
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: true
+            ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref ArtifactKey
+      Tags:
+        - { Key: Name, Value: !Sub '${NamePrefix}-artifacts-bucket' }
+
+  ArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: 's3:*'
+            Resource:
+              - !Sub '${ArtifactBucket.Arn}'
+              - !Sub '${ArtifactBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+Outputs:
+  ArtifactBucketName:
+    Value: !Ref ArtifactBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-ArtifactBucketName'
+  ArtifactBucketArn:
+    Value: !GetAtt ArtifactBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ArtifactBucketArn'
+  ArtifactKmsKeyArn:
+    Value: !GetAtt ArtifactKey.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ArtifactKmsKeyArn'
+  ArtifactKmsAlias:
+    Value: !Ref ArtifactKeyAlias
