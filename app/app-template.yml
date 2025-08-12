@@ -1,0 +1,13 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Pipeline smoke test - creates a private, SSE-S3 bucket
+Resources:
+  AppBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+Outputs:
+  AppBucketName: { Value: !Ref AppBucket }

@@ -1,0 +1,13 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ProtectBucketAndKmsFromDestructiveUpdates",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": ["Update:Replace", "Update:Delete"],
+      "Resource": "*",
+      "Condition": { "StringEquals": { "ResourceType": ["AWS::S3::Bucket","AWS::KMS::Key"] } }
+    }
+  ]
+}

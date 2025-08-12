@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: IAM roles for CodePipeline, CodeBuild, and CloudFormation execution (artifact bucket SSE-KMS aware)
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: trd
+  ArtifactBucketName:
+    Type: String
+    Description: Name of the artifacts bucket (from bootstrap stack)
+  ArtifactBucketArn:
+    Type: String
+    Description: ARN of the artifacts bucket (from bootstrap stack)
+  ArtifactKmsKeyArn:
+    Type: String
+    Description: KMS CMK ARN used by the artifacts bucket
+
+Resources:
+  # ---------------- CodePipeline service role ----------------
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}-codepipeline-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codepipeline.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: cp-s3-kms-cfn-build
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # S3 artifact bucket access
+              - Sid: S3Artifacts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - !Ref ArtifactBucketArn
+                  - !Sub '${ArtifactBucketArn}/*'
+              # KMS for SSE-KMS artifacts
+              - Sid: KmsForArtifacts
+                Effect: Allow
+                Action:
+                  - kms:Encrypt
+                  - kms:Decrypt
+                  - kms:ReEncrypt*
+                  - kms:GenerateDataKey*
+                  - kms:DescribeKey
+                Resource: !Ref ArtifactKmsKeyArn
+              # Start/inspect CodeBuild
+              - Sid: CodeBuild
+                Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                Resource: '*'
+              # CloudFormation ChangeSets (the pipeline creates & executes them)
+              - Sid: CloudFormation
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:ValidateTemplate
+                Resource: '*'
+              # Pass the CFN execution role and CodeBuild role
+              - Sid: PassRoles
+                Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !GetAtt CloudFormationExecutionRole.Arn
+                  - !GetAtt CodeBuildRole.Arn
+                Condition:
+                  StringLike:
+                    iam:PassedToService:
+                      - cloudformation.amazonaws.com
+                      - codebuild.amazonaws.com
+
+  # ---------------- CodeBuild service role ----------------
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}-codebuild-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codebuild.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: cb-s3-kms-logs-ecr
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # S3 artifact IO
+              - Sid: S3Artifacts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - !Ref ArtifactBucketArn
+                  - !Sub '${ArtifactBucketArn}/*'
+              # KMS for artifact encryption/decryption
+              - Sid: KmsForArtifacts
+                Effect: Allow
+                Action:
+                  - kms:Encrypt
+                  - kms:Decrypt
+                  - kms:ReEncrypt*
+                  - kms:GenerateDataKey*
+                  - kms:DescribeKey
+                Resource: !Ref ArtifactKmsKeyArn
+              # CloudWatch Logs for build logs
+              - Sid: Logs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+              # (Optional) ECR auth for future container builds
+              - Sid: EcrAuth
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+
+  # ---------------- CloudFormation execution role ----------------
+  CloudFormationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}-cfn-execution-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudformation.amazonaws.com }
+            Action: sts:AssumeRole
+      # NOTE: Start with Admin to unblock; tighten to least-priv per target resources later.
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+
+Outputs:
+  CodePipelineRoleArn:
+    Value: !GetAtt CodePipelineRole.Arn
+    Export: { Name: !Sub '${AWS::StackName}-CodePipelineRoleArn' }
+  CodeBuildRoleArn:
+    Value: !GetAtt CodeBuildRole.Arn
+    Export: { Name: !Sub '${AWS::StackName}-CodeBuildRoleArn' }
+  CloudFormationExecutionRoleArn:
+    Value: !GetAtt CloudFormationExecutionRole.Arn
+    Export: { Name: !Sub '${AWS::StackName}-CloudFormationExecutionRoleArn' }
