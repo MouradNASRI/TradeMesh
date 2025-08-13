@@ -4,8 +4,8 @@ Description: Trading Platform - Networking (VPC, subnets by tier, routes, NAT, e
 Parameters:
   NamePrefix:             { Type: String, Default: trd }
   VpcCidr:                { Type: String, Default: 10.20.0.0/16 }
-  EnableIpv6:             { Type: String, AllowedValues: [true,false], Default: false }
-  NatPerAz:               { Type: String, AllowedValues: [true,false], Default: false } # dev=false, prod=true
+  EnableIpv6:             { Type: String, AllowedValues: ["true","false"], Default: "false" }
+  NatPerAz:               { Type: String, AllowedValues: ["true","false"], Default: "false" } # dev=false, prod=true
 
   # AZs
   Az1: { Type: AWS::EC2::AvailabilityZone::Name, Default: us-east-1a }
