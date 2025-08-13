@@ -1,0 +1,37 @@
+{
+  "Parameters": {
+    "NamePrefix": "trd",
+    "VpcCidr": "10.20.0.0/16",
+    "EnableIpv6": "false",
+    "NatPerAz": "false",
+
+    "Az1": "us-east-1a",
+    "Az2": "us-east-1b",
+    "Az3": "us-east-1c",
+
+    "PubAz1Cidr": "10.20.0.0/24",
+    "PubAz2Cidr": "10.20.1.0/24",
+    "PubAz3Cidr": "10.20.2.0/24",
+
+    "AppAz1Cidr": "10.20.64.0/20",
+    "AppAz2Cidr": "10.20.80.0/20",
+    "AppAz3Cidr": "10.20.96.0/20",
+
+    "DataAz1Cidr": "10.20.16.0/24",
+    "DataAz2Cidr": "10.20.17.0/24",
+    "DataAz3Cidr": "10.20.18.0/24",
+
+    "EpAz1Cidr": "10.20.32.0/26",
+    "EpAz2Cidr": "10.20.32.64/26",
+    "EpAz3Cidr": "10.20.32.128/26",
+
+    "AnaAz1Cidr": "10.20.48.0/24",
+    "AnaAz2Cidr": "10.20.49.0/24",
+    "AnaAz3Cidr": "10.20.50.0/24"
+  },
+  "Tags": {
+    "Project": "TradingPlatform",
+    "Env": "dev",
+    "Owner": "moura"
+  }
+}

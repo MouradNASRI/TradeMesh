@@ -81,7 +81,7 @@ Resources:
             Effect: Deny
             Principal: "*"
             Action: 's3:*'
-            Resource:
+            Resource:-
               - !Sub '${ArtifactBucket.Arn}'
               - !Sub '${ArtifactBucket.Arn}/*'
             Condition:

@@ -1,0 +1,85 @@
+aws codestar-connections get-connection \
+  --connection-arn arn:aws:codestar-connections:us-east-1:785032444795:connection/b0d6f7d5-3ff1-4136-af55-46bda6041b00 \
+  --query 'Connection.ConnectionStatus'
+
+aws codepipeline get-pipeline --name trd-foundation-pipeline \
+  --query 'pipeline.stages[].name'
+
+EXEC_ID=$(aws codepipeline start-pipeline-execution \
+  --name trd-foundation-pipeline --query pipelineExecutionId --output text)
+
+aws codepipeline get-pipeline-execution \
+  --pipeline-name trd-foundation-pipeline --pipeline-execution-id "$EXEC_ID" \
+  --query 'pipelineExecution.status'
+
+aws codepipeline get-pipeline-state --name trd-foundation-pipeline \
+  --query 'stageStates[].{Stage:stageName,Status:latestExecution.status,Action:actionStates[0].actionName}'
+
+aws codebuild list-builds-for-project \
+  --project-name trd-foundation-pipeline-build --max-items 1 --query 'ids[0]' --output text | \
+xargs -I {} aws codebuild batch-get-builds --ids {} \
+  --query 'builds[0].logs.deepLink' --output text
+
+aws cloudformation describe-stacks \
+  --stack-name trd-codepipeline-github \
+  --query 'Stacks[0].{Status:StackStatus,Outputs:Outputs}'
+
+aws s3 ls s3://trd-artifacts-785032444795-us-east-1/ --recursive | head
+
+BOOT=trd-bootstrap-artifacts
+ROLES=trd-iam-roles
+
+BUCKET_NAME=$(aws cloudformation list-exports --query "Exports[?Name=='${BOOT}-ArtifactBucketName'].Value" --output text)
+CP_ROLE_ARN=$(aws cloudformation list-exports --query "Exports[?Name=='${ROLES}-CodePipelineRoleArn'].Value" --output text)
+CB_ROLE_ARN=$(aws cloudformation list-exports --query "Exports[?Name=='${ROLES}-CodeBuildRoleArn'].Value" --output text)
+CFN_EXEC_ROLE_ARN=$(aws cloudformation list-exports --query "Exports[?Name=='${ROLES}-CloudFormationExecutionRoleArn'].Value" --output text)
+CONNEXION_ARN=arn:aws:codestar-connections:us-east-1:785032444795:connection/b0d6f7d5-3ff1-4136-af55-46bda6041b00
+
+echo $BOOT; echo $ROLES; echo $CP_ROLE_ARN; echo $CB_ROLE_ARN; echo $CFN_EXEC_ROLE_ARN;
+
+aws cloudformation deploy \
+  --stack-name trd-codepipeline-github \
+  --template-file cloudformation/stacks/codepipeline-github.yml \
+  --parameter-overrides \
+      PipelineName=trd-foundation-pipeline \
+      ArtifactBucketName=$BUCKET_NAME \
+      CodePipelineRoleArn=$CP_ROLE_ARN \
+      CloudFormationExecutionRoleArn=$CFN_EXEC_ROLE_ARN \
+      ConnectionArn=arn:aws:codestar-connections:us-east-1:785032444795:connection/b0d6f7d5-3ff1-4136-af55-46bda6041b00 \
+      FullRepositoryId=MouradNASRI/TradeMesh \
+      BranchName=main \
+      CreateBuildProject=true \
+      CodeBuildServiceRoleArn=$CB_ROLE_ARN \
+      StackName=trd-foundation-test \
+      TemplateFilePath=app/app-template.yml \
+      ChangeSetName=cs-foundation
+
+PROJECT=$(aws cloudformation describe-stacks \
+  --stack-name trd-codepipeline-github \
+  --query "Stacks[0].Outputs[?OutputKey=='BuildProjectNameOut'].OutputValue" \
+  --output text
+)
+
+aws codebuild list-builds-for-project --project-name $PROJECT
+
+EXEC_ID=$(aws codepipeline start-pipeline-execution \
+  --name trd-foundation-pipeline \
+  --query pipelineExecutionId --output text)
+
+BUILD_ID=$(aws codepipeline get-pipeline-state --name trd-foundation-pipeline \
+  --query "stageStates[?stageName=='Build'].actionStates[0].latestExecution.externalExecutionId" \
+  --output text)
+
+aws iam put-role-policy \
+  --role-name $CP_ROLE_ARN \
+  --policy-name AllowUseConnection \
+  --policy-document "{
+    \"Version\":\"2012-10-17\",
+    \"Statement\":[{ 
+      \"Effect\":\"Allow\",
+      \"Action\":[\"codestar-connections:UseConnection\",\"codeconnections:UseConnection\"],
+      \"Resource\":$CONNEXION_ARN
+    }]
+  }"
+
+  
