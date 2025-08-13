@@ -82,4 +82,9 @@ aws iam put-role-policy \
     }]
   }"
 
-  
+  aws codebuild batch-get-projects --names trd-foundation-pipeline-build \
+  --query 'projects[0].logsConfig'
+
+  ID=$(aws codebuild list-builds-for-project --project-name trd-foundation-pipeline-build --max-results 1 --query 'ids[0]' --output text)
+aws codebuild batch-get-builds --ids "$ID" --query 'builds[0].logs.deepLink' --output text
+

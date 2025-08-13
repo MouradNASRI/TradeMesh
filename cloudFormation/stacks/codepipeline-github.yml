@@ -46,13 +46,16 @@ Parameters:
   # --- Deploy (CloudFormation) ---
   StackName:
     Type: String
-    Default: trd-foundation-test
+    Default: trd-networking
   TemplateFilePath:
     Type: String
-    Default: app/app-template.yml
+    Default: cloudformation/stacks/networking.yml
+  TemplateConfigPath:           # << add this
+    Type: String
+    Default: cloudformation/envs/dev/networking-params.json
   ChangeSetName:
     Type: String
-    Default: cs-foundation
+    Default: cs-networking
 
 Conditions:
   CreateBuildProjectCond: !Equals [!Ref CreateBuildProject, "true"]
@@ -146,6 +149,7 @@ Resources:
                 StackName: !Ref StackName
                 ChangeSetName: !Ref ChangeSetName
                 TemplatePath: !Sub 'BuildArtifact::${TemplateFilePath}'
+                TemplateConfiguration: !Sub 'BuildArtifact::${TemplateConfigPath}'   # << add this
                 Capabilities: CAPABILITY_NAMED_IAM
                 RoleArn: !Ref CloudFormationExecutionRoleArn
               InputArtifacts:

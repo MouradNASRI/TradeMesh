@@ -2,7 +2,8 @@ version: 0.2
 phases:
   build:
     commands:
-      - echo "Packaging CloudFormation template"
+      - echo "Packaging Networking template"
 artifacts:
   files:
-    - app/app-template.yml
+    - cloudformation/stacks/networking.yml
+    - cloudformation/envs/dev/networking-params.json
