@@ -187,8 +187,3 @@ Outputs:
   BuildProjectNameOut:
     Condition: CreateBuildProjectCond
     Value: !Ref BuildProject
-
-
-aws codestar-connections get-connection \
-  --connection-arn arn:aws:codestar-connections:us-east-1:785032444795:connection/b0d6f7d5-3ff1-4136-af55-46bda6041b00 \
-  --query 'Connection.ConnectionStatus'
