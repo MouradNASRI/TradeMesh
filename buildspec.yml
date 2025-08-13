@@ -5,5 +5,5 @@ phases:
       - echo "Packaging Networking template"
 artifacts:
   files:
-    - cloudformation/stacks/networking.yml
-    - cloudformation/envs/dev/networking-params.json
+    - cloudFormation/stacks/networking.yml
+    - cloudFormation/envs/dev/networking-params.json
