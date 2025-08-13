@@ -37,6 +37,7 @@ Parameters:
 Conditions:
   UseIpv6: !Equals [!Ref EnableIpv6, "true"]
   OneNatOnly: !Equals [!Ref NatPerAz, "false"]
+  MultiNat:   !Equals [!Ref NatPerAz, "true"]
 
 Resources:
   # VPC
@@ -121,20 +122,20 @@ Resources:
 
   NatEip2:
     Type: AWS::EC2::EIP
-    Condition: !Not [!Ref OneNatOnly]
+    Condition: MultiNat
     Properties: { Domain: vpc }
   NatGw2:
     Type: AWS::EC2::NatGateway
-    Condition: !Not [!Ref OneNatOnly]
+    Condition: MultiNat
     Properties: { AllocationId: !GetAtt NatEip2.AllocationId, SubnetId: !Ref PubAz2, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-nat-az2'}] }
 
   NatEip3:
     Type: AWS::EC2::EIP
-    Condition: !Not [!Ref OneNatOnly]
+    Condition: MultiNat
     Properties: { Domain: vpc }
   NatGw3:
     Type: AWS::EC2::NatGateway
-    Condition: !Not [!Ref OneNatOnly]
+    Condition: MultiNat
     Properties: { AllocationId: !GetAtt NatEip3.AllocationId, SubnetId: !Ref PubAz3, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-nat-az3'}] }
 
   # ---------- Route tables ----------
