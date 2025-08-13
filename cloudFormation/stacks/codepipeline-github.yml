@@ -49,10 +49,10 @@ Parameters:
     Default: trd-networking
   TemplateFilePath:
     Type: String
-    Default: cloudformation/stacks/networking.yml
+    Default: cloudFormation/stacks/networking.yml
   TemplateConfigPath:           # << add this
     Type: String
-    Default: cloudformation/envs/dev/networking-params.json
+    Default: cloudFormation/envs/dev/networking-params.json
   ChangeSetName:
     Type: String
     Default: cs-networking

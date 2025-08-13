@@ -88,3 +88,44 @@ aws iam put-role-policy \
   ID=$(aws codebuild list-builds-for-project --project-name trd-foundation-pipeline-build --max-results 1 --query 'ids[0]' --output text)
 aws codebuild batch-get-builds --ids "$ID" --query 'builds[0].logs.deepLink' --output text
 
+aws cloudformation deploy \
+  --region us-east-1 \
+  --stack-name trd-codepipeline-github \
+  --template-file cloudformation/stacks/codepipeline-github.yml \
+  --parameter-overrides \
+      PipelineName=trd-foundation-pipeline \
+      ArtifactBucketName=$BUCKET_NAME \
+      CodePipelineRoleArn=$CP_ROLE_ARN \
+      CloudFormationExecutionRoleArn=$CFN_EXEC_ROLE_ARN \
+      ConnectionArn=$CONNEXION_ARN \
+      FullRepositoryId=MouradNASRI/TradeMesh \
+      BranchName=main \
+      CreateBuildProject=true \
+      CodeBuildServiceRoleArn=$CB_ROLE_ARN \
+      StackName=trd-networking \
+      TemplateFilePath=cloudformation/stacks/networking.yml \
+      TemplateConfigPath=cloudformation/envs/dev/networking-params.json \
+      ChangeSetName=cs-networking
+
+
+aws cloudformation deploy \
+  --region "$AWS_REGION" \
+  --stack-name trd-codepipeline-github \
+  --template-file cloudformation/stacks/codepipeline-github.yml \
+  --parameter-overrides \
+      PipelineName=trd-foundation-pipeline \
+      ArtifactBucketName="$BUCKET_NAME" \
+      CodePipelineRoleArn="$CP_ROLE_ARN" \
+      CloudFormationExecutionRoleArn="$CFN_EXEC_ROLE_ARN" \
+      ConnectionArn="$CONNEXION_ARN" \
+      FullRepositoryId="MouradNASRI/TradeMesh" \
+      BranchName=main \
+      CreateBuildProject=true \
+      CodeBuildServiceRoleArn="$CB_ROLE_ARN" \
+      StackName=trd-networking \
+      TemplateFilePath=cloudformation/stacks/networking.yml \
+      TemplateConfigPath=cloudformation/envs/dev/networking-params.json \
+      ChangeSetName=cs-networking
+
+aws codepipeline start-pipeline-execution --region us-east-1 --name trd-foundation-pipeline
+
