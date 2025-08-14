@@ -123,9 +123,35 @@ aws cloudformation deploy \
       CreateBuildProject=true \
       CodeBuildServiceRoleArn="$CB_ROLE_ARN" \
       StackName=trd-networking \
-      TemplateFilePath=cloudformation/stacks/networking.yml \
-      TemplateConfigPath=cloudformation/envs/dev/networking-params.json \
+      TemplateFilePath=cloudFormation/stacks/networking.yml \
+      TemplateConfigPath=cloudFormation/envs/dev/networking-params.json \
       ChangeSetName=cs-networking
 
 aws codepipeline start-pipeline-execution --region us-east-1 --name trd-foundation-pipeline
 
+aws cloudformation describe-stacks --region us-east-1 \
+  --stack-name trd-networking --query 'Stacks[0].StackStatus'
+
+
+aws cloudformation validate-template \
+  --template-body file://cloudformation/stacks/networking.yml
+
+
+aws cloudformation deploy \
+  --region "$AWS_REGION" \
+  --stack-name trd-codepipeline-github \
+  --template-file cloudformation/stacks/codepipeline-github.yml \
+  --parameter-overrides \
+      PipelineName=trd-foundation-pipeline \
+      ArtifactBucketName="$BUCKET_NAME" \
+      CodePipelineRoleArn="$CP_ROLE_ARN" \
+      CloudFormationExecutionRoleArn="$CFN_EXEC_ROLE_ARN" \
+      ConnectionArn="$CONNEXION_ARN" \
+      FullRepositoryId="MouradNASRI/TradeMesh" \
+      BranchName=main \
+      CreateBuildProject=true \
+      CodeBuildServiceRoleArn="$CB_ROLE_ARN" \
+      StackName=trd-networking \
+      TemplateFilePath=cloudFormation/stacks/streams-events.yml \
+      TemplateConfigPath=cloudFormation/envs/dev/streams-params.json \
+      ChangeSetName=cs-streams

@@ -1,0 +1,121 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Trading Platform - Streams & Events (Kinesis, EventBridge, SQS DLQ, alarms)
+
+Parameters:
+  NamePrefix:              { Type: String, Default: trd }
+  StreamShardCount:        { Type: Number, Default: 1, MinValue: 1 }
+  StreamRetentionHours:    { Type: Number, Default: 24, MinValue: 24, MaxValue: 8760 }
+  EventBusName:            { Type: String, Default: trd-app-bus }
+  CreateAlarms:            { Type: String, AllowedValues: [true,false], Default: true }
+
+Conditions:
+  DoAlarms: !Equals [!Ref CreateAlarms, "true"]
+
+Resources:
+  # ---- Kinesis Data Stream for market ticks ----
+  TicksStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: !Sub '${NamePrefix}-ticks'
+      ShardCount: !Ref StreamShardCount
+      RetentionPeriodHours: !Ref StreamRetentionHours
+      StreamEncryption:
+        EncryptionType: KMS
+        KeyId: alias/aws/kinesis   # AWS-managed KMS key
+
+  # ---- EventBridge application bus ----
+  AppBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Ref EventBusName
+
+  # Example: scheduled heartbeat to the bus (handy for testing)
+  HeartbeatRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${NamePrefix}-heartbeat-5m'
+      EventBusName: !Ref AppBus
+      ScheduleExpression: rate(5 minutes)
+      State: ENABLED
+      Targets:
+        - Id: hb
+          Arn: !GetAtt HeartbeatQueue.Arn
+          RoleArn: !GetAtt EventsToSqsRole.Arn
+
+  # ---- SQS queues ----
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${NamePrefix}-signals-dlq'
+      MessageRetentionPeriod: 1209600  # 14 days
+
+  HeartbeatQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${NamePrefix}-events'
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  # Allow EventBridge rule to send to SQS
+  EventsToSqsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}-events-to-sqs-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: send-to-sqs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt HeartbeatQueue.Arn
+
+  # Queue policy that allows events service via the specific rule
+  HeartbeatQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [ !Ref HeartbeatQueue ]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowEventBridgeRule
+            Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sqs:SendMessage
+            Resource: !GetAtt HeartbeatQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt HeartbeatRule.Arn
+
+  # ---- CloudWatch alarm: Kinesis iterator age (lag) ----
+  IteratorAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: DoAlarms
+    Properties:
+      AlarmName: !Sub '${NamePrefix}-ticks-iterator-age-high'
+      AlarmDescription: 'Kinesis consumer lag (IteratorAge) > 30s'
+      Namespace: AWS/Kinesis
+      MetricName: GetRecords.IteratorAgeMilliseconds
+      Dimensions:
+        - Name: StreamName
+          Value: !Ref TicksStream
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 30000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  TicksStreamName: { Value: !Ref TicksStream, Export: { Name: !Sub '${AWS::StackName}-TicksStreamName' } }
+  TicksStreamArn:  { Value: !GetAtt TicksStream.Arn, Export: { Name: !Sub '${AWS::StackName}-TicksStreamArn' } }
+  EventBusArn:     { Value: !GetAtt AppBus.Arn, Export: { Name: !Sub '${AWS::StackName}-EventBusArn' } }
+  HeartbeatQueueUrl: { Value: !Ref HeartbeatQueue }
+  DLQUrl:            { Value: !Ref DeadLetterQueue }

@@ -46,16 +46,16 @@ Parameters:
   # --- Deploy (CloudFormation) ---
   StackName:
     Type: String
-    Default: trd-networking
+    Default: trd-streams
   TemplateFilePath:
     Type: String
-    Default: cloudFormation/stacks/networking.yml
+    Default: cloudFormation/stacks/streams-events.yml
   TemplateConfigPath:           # << add this
     Type: String
-    Default: cloudFormation/envs/dev/networking-params.json
+    Default: cloudFormation/envs/dev/streams-params.json
   ChangeSetName:
     Type: String
-    Default: cs-networking
+    Default: cs-streams
 
 Conditions:
   CreateBuildProjectCond: !Equals [!Ref CreateBuildProject, "true"]

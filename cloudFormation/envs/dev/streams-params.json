@@ -1,0 +1,14 @@
+{
+  "Parameters": {
+    "NamePrefix": "trd",
+    "StreamShardCount": "1",
+    "StreamRetentionHours": "24",
+    "EventBusName": "trd-app-bus",
+    "CreateAlarms": "true"
+  },
+  "Tags": {
+    "Project": "TradingPlatform",
+    "Env": "dev",
+    "Owner": "moura"
+  }
+}
