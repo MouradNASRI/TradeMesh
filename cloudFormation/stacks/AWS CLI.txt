@@ -151,7 +151,19 @@ aws cloudformation deploy \
       BranchName=main \
       CreateBuildProject=true \
       CodeBuildServiceRoleArn="$CB_ROLE_ARN" \
-      StackName=trd-networking \
+      StackName=trd-streams \
       TemplateFilePath=cloudFormation/stacks/streams-events.yml \
       TemplateConfigPath=cloudFormation/envs/dev/streams-params.json \
       ChangeSetName=cs-streams
+
+
+aws cloudformation describe-stacks --region us-east-1 \
+  --stack-name trd-codepipeline-github --query 'Stacks[0].StackStatus'
+
+EXEC_ID=$(aws codepipeline start-pipeline-execution \
+  --name trd-foundation-pipeline \
+  --query pipelineExecutionId --output text)
+
+aws codepipeline get-pipeline-execution \
+  --pipeline-name trd-foundation-pipeline --pipeline-execution-id "$EXEC_ID" \
+  --query 'pipelineExecution.status'
