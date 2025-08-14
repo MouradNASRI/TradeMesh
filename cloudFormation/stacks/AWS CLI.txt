@@ -167,3 +167,13 @@ EXEC_ID=$(aws codepipeline start-pipeline-execution \
 aws codepipeline get-pipeline-execution \
   --pipeline-name trd-foundation-pipeline --pipeline-execution-id "$EXEC_ID" \
   --query 'pipelineExecution.status'
+
+aws cloudformation describe-stack-events \
+  --region us-east-1 \
+  --stack-name trd-streams \
+  --query "StackEvents[?contains(ResourceStatus,'FAILED') || contains(ResourceStatus,'ROLLBACK')].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]" \
+  --output table
+
+aws cloudformation delete-stack --region us-east-1 --stack-name trd-streams
+
+aws cloudformation wait stack-delete-complete --region us-east-1 --stack-name trd-streams
