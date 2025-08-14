@@ -88,7 +88,7 @@ Resources:
     Properties:
       Name: !Sub '${NamePrefix}-heartbeat-5m'
       State: ENABLED
-      FlexibleTimeWindow: { Mode: OFF }          # fire on time; add jitter by widening this window
+      FlexibleTimeWindow: { Mode: "OFF" }          # fire on time; add jitter by widening this window
       ScheduleExpression: !Ref HeartbeatRate
       Target:
         Arn: !GetAtt AppBus.Arn
