@@ -1,241 +1,291 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Trading Platform - Networking (VPC, subnets by tier, routes, NAT, endpoints) - us-east-1
+Description: TradeMesh — Networking (VPC, subnets per tier, IGW, NAT, routes, endpoints)
 
 Parameters:
-  NamePrefix:             { Type: String, Default: trd }
-  VpcCidr:                { Type: String, Default: 10.20.0.0/16 }
-  EnableIpv6:             { Type: String, AllowedValues: ["true","false"], Default: "false" }
-  NatPerAz:               { Type: String, AllowedValues: ["true","false"], Default: "false" } # dev=false, prod=true
-
-  # AZs
-  Az1: { Type: AWS::EC2::AvailabilityZone::Name, Default: us-east-1a }
-  Az2: { Type: AWS::EC2::AvailabilityZone::Name, Default: us-east-1b }
-  Az3: { Type: AWS::EC2::AvailabilityZone::Name, Default: us-east-1c }
-
-  # ---- CIDR blocks (pre-sized per tier) ----
-  # Public
-  PubAz1Cidr: { Type: String, Default: 10.20.0.0/24 }
-  PubAz2Cidr: { Type: String, Default: 10.20.1.0/24 }
-  PubAz3Cidr: { Type: String, Default: 10.20.2.0/24 }
-  # App-Private (big)
-  AppAz1Cidr: { Type: String, Default: 10.20.64.0/20 }
-  AppAz2Cidr: { Type: String, Default: 10.20.80.0/20 }
-  AppAz3Cidr: { Type: String, Default: 10.20.96.0/20 }
-  # Data-Isolated (no default route)
-  DataAz1Cidr: { Type: String, Default: 10.20.16.0/24 }
-  DataAz2Cidr: { Type: String, Default: 10.20.17.0/24 }
-  DataAz3Cidr: { Type: String, Default: 10.20.18.0/24 }
-  # Endpoints (interface endpoints)
-  EpAz1Cidr: { Type: String, Default: 10.20.32.0/26 }
-  EpAz2Cidr: { Type: String, Default: 10.20.32.64/26 }
-  EpAz3Cidr: { Type: String, Default: 10.20.32.128/26 }
-  # Analytics
-  AnaAz1Cidr: { Type: String, Default: 10.20.48.0/24 }
-  AnaAz2Cidr: { Type: String, Default: 10.20.49.0/24 }
-  AnaAz3Cidr: { Type: String, Default: 10.20.50.0/24 }
+  NamePrefix:        { Type: String, Default: trd }
+  VpcCidr:           { Type: String, Default: 10.20.0.0/16 }
+  Az1:               { Type: String, Default: us-east-1a }
+  Az2:               { Type: String, Default: us-east-1b }
+  Az3:               { Type: String, Default: us-east-1c }
+  NatPerAz:          { Type: String, AllowedValues: [true,false], Default: false }
 
 Conditions:
-  UseIpv6: !Equals [!Ref EnableIpv6, "true"]
-  OneNatOnly: !Equals [!Ref NatPerAz, "false"]
-  MultiNat:   !Equals [!Ref NatPerAz, "true"]
+  UseNatPerAz: !Equals [!Ref NatPerAz, "true"]
 
 Resources:
-  # VPC
-  Vpc:
+
+  # ---------------- VPC ----------------
+  VPC:
     Type: AWS::EC2::VPC
     Properties:
       CidrBlock: !Ref VpcCidr
-      EnableDnsSupport: true
-      EnableDnsHostnames: true
-      Tags: [{Key: Name, Value: !Sub '${NamePrefix}-vpc'}]
-
-  VpcIpv6Cidr:
-    Type: AWS::EC2::VPCCidrBlock
-    Condition: UseIpv6
-    Properties:
-      VpcId: !Ref Vpc
-      AmazonProvidedIpv6CidrBlock: true
+      EnableDnsSupport: true      # name resolution inside VPC
+      EnableDnsHostnames: true    # required for private DNS (endpoints), ALB, etc.
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-vpc' }]
 
   IGW:
     Type: AWS::EC2::InternetGateway
-    Properties: { Tags: [{Key: Name, Value: !Sub '${NamePrefix}-igw'}] }
+    Properties:
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-igw' }]
 
-  IGWAttach:
+  VpcIgwAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
-      VpcId: !Ref Vpc
       InternetGatewayId: !Ref IGW
+      VpcId: !Ref VPC
 
-  # ---------- Subnets (15 total: 5 tiers x 3 AZs) ----------
-  # helper macro-like function to reduce duplication would be nice, but CFN doesn't support loops; we list explicitly.
+  # ------------- Deterministic /20 subnets from the VPC CIDR -------------
+  # Split the /16 into 20 subnets of /20 (cidrBits: 4). We then pick indexes per AZ + tier.
+  # AZ1 uses indexes 0..4, AZ2 uses 5..9, AZ3 uses 10..14
+  SubnetBlocks:
+    Type: 'AWS::EC2::VPCCidrBlock'   # dummy placeholder? No — we’ll compute inline with Fn::Cidr; this logical is not needed
+    Condition: !Equals [ "1", "0" ]  # never created (CFN requires a resource section above); ignore
+  # Helper local list
+  # (we'll inline Fn::Cidr where needed)
 
-  # Public
-  PubAz1: { Type: AWS::EC2::Subnet, Properties: { VpcId: !Ref Vpc, AvailabilityZone: !Ref Az1, CidrBlock: !Ref PubAz1Cidr, MapPublicIpOnLaunch: true, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-pub-az1'}] } }
-  PubAz2: { Type: AWS::EC2::Subnet, Properties: { VpcId: !Ref Vpc, AvailabilityZone: !Ref Az2, CidrBlock: !Ref PubAz2Cidr, MapPublicIpOnLaunch: true, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-pub-az2'}] } }
-  PubAz3: { Type: AWS::EC2::Subnet, Properties: { VpcId: !Ref Vpc, AvailabilityZone: !Ref Az3, CidrBlock: !Ref PubAz3Cidr, MapPublicIpOnLaunch: true, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-pub-az3'}] } }
-
-  # App-Private
-  AppAz1: { Type: AWS::EC2::Subnet, Properties: { VpcId: !Ref Vpc, AvailabilityZone: !Ref Az1, CidrBlock: !Ref AppAz1Cidr, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-app-az1'}] } }
-  AppAz2: { Type: AWS::EC2::Subnet, Properties: { VpcId: !Ref Vpc, AvailabilityZone: !Ref Az2, CidrBlock: !Ref AppAz2Cidr, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-app-az2'}] } }
-  AppAz3: { Type: AWS::EC2::Subnet, Properties: { VpcId: !Ref Vpc, AvailabilityZone: !Ref Az3, CidrBlock: !Ref AppAz3Cidr, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-app-az3'}] } }
-
-  # Data-Isolated
-  DataAz1: { Type: AWS::EC2::Subnet, Properties: { VpcId: !Ref Vpc, AvailabilityZone: !Ref Az1, CidrBlock: !Ref DataAz1Cidr, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-data-az1'}] } }
-  DataAz2: { Type: AWS::EC2::Subnet, Properties: { VpcId: !Ref Vpc, AvailabilityZone: !Ref Az2, CidrBlock: !Ref DataAz2Cidr, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-data-az2'}] } }
-  DataAz3: { Type: AWS::EC2::Subnet, Properties: { VpcId: !Ref Vpc, AvailabilityZone: !Ref Az3, CidrBlock: !Ref DataAz3Cidr, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-data-az3'}] } }
-
-  # Endpoints
-  EpAz1: { Type: AWS::EC2::Subnet, Properties: { VpcId: !Ref Vpc, AvailabilityZone: !Ref Az1, CidrBlock: !Ref EpAz1Cidr, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-ep-az1'}] } }
-  EpAz2: { Type: AWS::EC2::Subnet, Properties: { VpcId: !Ref Vpc, AvailabilityZone: !Ref Az2, CidrBlock: !Ref EpAz2Cidr, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-ep-az2'}] } }
-  EpAz3: { Type: AWS::EC2::Subnet, Properties: { VpcId: !Ref Vpc, AvailabilityZone: !Ref Az3, CidrBlock: !Ref EpAz3Cidr, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-ep-az3'}] } }
-
-  # Analytics
-  AnaAz1: { Type: AWS::EC2::Subnet, Properties: { VpcId: !Ref Vpc, AvailabilityZone: !Ref Az1, CidrBlock: !Ref AnaAz1Cidr, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-ana-az1'}] } }
-  AnaAz2: { Type: AWS::EC2::Subnet, Properties: { VpcId: !Ref Vpc, AvailabilityZone: !Ref Az2, CidrBlock: !Ref AnaAz2Cidr, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-ana-az2'}] } }
-  AnaAz3: { Type: AWS::EC2::Subnet, Properties: { VpcId: !Ref Vpc, AvailabilityZone: !Ref Az3, CidrBlock: !Ref AnaAz3Cidr, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-ana-az3'}] } }
-
-  # (Optional) IPv6 assign to subnets
-  Ipv6SubnetAz1Pub:
-    Type: AWS::EC2::SubnetCidrBlock
-    Condition: UseIpv6
+  # ---------------- Public subnets (MapPublicIpOnLaunch=true) ----------------
+  PublicSubnetAz1:
+    Type: AWS::EC2::Subnet
     Properties:
-      SubnetId: !Ref PubAz1
-      Ipv6CidrBlock: !Select [ 0, !Cidr [ !Select [0, !GetAtt Vpc.Ipv6CidrBlocks], 256, 64 ] ]
-  Ipv6SubnetAz2Pub:
-    Type: AWS::EC2::SubnetCidrBlock
-    Condition: UseIpv6
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref Az1
+      MapPublicIpOnLaunch: true
+      CidrBlock: !Select [0, !Cidr [ !Ref VpcCidr, 20, 4 ]]
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-public-a' }, { Key: Tier, Value: public }]
+
+  PublicSubnetAz2:
+    Type: AWS::EC2::Subnet
     Properties:
-      SubnetId: !Ref PubAz2
-      Ipv6CidrBlock: !Select [ 1, !Cidr [ !Select [0, !GetAtt Vpc.Ipv6CidrBlocks], 256, 64 ] ]
-  Ipv6SubnetAz3Pub:
-    Type: AWS::EC2::SubnetCidrBlock
-    Condition: UseIpv6
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref Az2
+      MapPublicIpOnLaunch: true
+      CidrBlock: !Select [5, !Cidr [ !Ref VpcCidr, 20, 4 ]]
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-public-b' }, { Key: Tier, Value: public }]
+
+  PublicSubnetAz3:
+    Type: AWS::EC2::Subnet
     Properties:
-      SubnetId: !Ref PubAz3
-      Ipv6CidrBlock: !Select [ 2, !Cidr [ !Select [0, !GetAtt Vpc.Ipv6CidrBlocks], 256, 64 ] ]
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref Az3
+      MapPublicIpOnLaunch: true
+      CidrBlock: !Select [10, !Cidr [ !Ref VpcCidr, 20, 4 ]]
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-public-c' }, { Key: Tier, Value: public }]
 
-  # ---------- NAT (1x or 3x) ----------
-  NatEip1: { Type: AWS::EC2::EIP, Properties: { Domain: vpc } }
-  NatGw1:
-    Type: AWS::EC2::NatGateway
-    Properties: { AllocationId: !GetAtt NatEip1.AllocationId, SubnetId: !Ref PubAz1, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-nat-az1'}] }
+  # ---------------- App subnets (private via NAT) ----------------
+  AppSubnetAz1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref Az1
+      CidrBlock: !Select [1, !Cidr [ !Ref VpcCidr, 20, 4 ]]
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-app-a' }, { Key: Tier, Value: app }]
 
-  NatEip2:
-    Type: AWS::EC2::EIP
-    Condition: MultiNat
-    Properties: { Domain: vpc }
-  NatGw2:
-    Type: AWS::EC2::NatGateway
-    Condition: MultiNat
-    Properties: { AllocationId: !GetAtt NatEip2.AllocationId, SubnetId: !Ref PubAz2, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-nat-az2'}] }
+  AppSubnetAz2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref Az2
+      CidrBlock: !Select [6, !Cidr [ !Ref VpcCidr, 20, 4 ]]
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-app-b' }, { Key: Tier, Value: app }]
 
-  NatEip3:
-    Type: AWS::EC2::EIP
-    Condition: MultiNat
-    Properties: { Domain: vpc }
-  NatGw3:
-    Type: AWS::EC2::NatGateway
-    Condition: MultiNat
-    Properties: { AllocationId: !GetAtt NatEip3.AllocationId, SubnetId: !Ref PubAz3, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-nat-az3'}] }
+  AppSubnetAz3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref Az3
+      CidrBlock: !Select [11, !Cidr [ !Ref VpcCidr, 20, 4 ]]
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-app-c' }, { Key: Tier, Value: app }]
 
-  # ---------- Route tables ----------
-  RtPublic:
-    Type: AWS::EC2::RouteTable
-    Properties: { VpcId: !Ref Vpc, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-rt-public'}] }
-  RtAppAz1:
-    Type: AWS::EC2::RouteTable
-    Properties: { VpcId: !Ref Vpc, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-rt-app-az1'}] }
-  RtAppAz2:
-    Type: AWS::EC2::RouteTable
-    Properties: { VpcId: !Ref Vpc, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-rt-app-az2'}] }
-  RtAppAz3:
-    Type: AWS::EC2::RouteTable
-    Properties: { VpcId: !Ref Vpc, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-rt-app-az3'}] }
-  RtDataAz1:
-    Type: AWS::EC2::RouteTable
-    Properties: { VpcId: !Ref Vpc, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-rt-data-az1'}] }
-  RtDataAz2:
-    Type: AWS::EC2::RouteTable
-    Properties: { VpcId: !Ref Vpc, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-rt-data-az2'}] }
-  RtDataAz3:
-    Type: AWS::EC2::RouteTable
-    Properties: { VpcId: !Ref Vpc, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-rt-data-az3'}] }
-  RtAnaAz1:
-    Type: AWS::EC2::RouteTable
-    Properties: { VpcId: !Ref Vpc, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-rt-ana-az1'}] }
-  RtAnaAz2:
-    Type: AWS::EC2::RouteTable
-    Properties: { VpcId: !Ref Vpc, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-rt-ana-az2'}] }
-  RtAnaAz3:
-    Type: AWS::EC2::RouteTable
-    Properties: { VpcId: !Ref Vpc, Tags: [{Key: Name, Value: !Sub '${NamePrefix}-rt-ana-az3'}] }
+  # ---------------- Data subnets (no outbound internet by default) ----------------
+  DataSubnetAz1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref Az1
+      CidrBlock: !Select [2, !Cidr [ !Ref VpcCidr, 20, 4 ]]
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-data-a' }, { Key: Tier, Value: data }]
 
-  # Routes
-  PubDefault:
+  DataSubnetAz2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref Az2
+      CidrBlock: !Select [7, !Cidr [ !Ref VpcCidr, 20, 4 ]]
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-data-b' }, { Key: Tier, Value: data }]
+
+  DataSubnetAz3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref Az3
+      CidrBlock: !Select [12, !Cidr [ !Ref VpcCidr, 20, 4 ]]
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-data-c' }, { Key: Tier, Value: data }]
+
+  # ---------------- Endpoint subnets (for interface endpoints if you add them) ----------------
+  EpSubnetAz1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref Az1
+      CidrBlock: !Select [3, !Cidr [ !Ref VpcCidr, 20, 4 ]]
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-ep-a' }, { Key: Tier, Value: endpoint }]
+
+  EpSubnetAz2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref Az2
+      CidrBlock: !Select [8, !Cidr [ !Ref VpcCidr, 20, 4 ]]
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-ep-b' }, { Key: Tier, Value: endpoint }]
+
+  EpSubnetAz3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref Az3
+      CidrBlock: !Select [13, !Cidr [ !Ref VpcCidr, 20, 4 ]]
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-ep-c' }, { Key: Tier, Value: endpoint }]
+
+  # ---------------- Analytics subnets (EMR/KDA/Flink, etc.) ----------------
+  AnalyticsSubnetAz1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref Az1
+      CidrBlock: !Select [4, !Cidr [ !Ref VpcCidr, 20, 4 ]]
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-analytics-a' }, { Key: Tier, Value: analytics }]
+
+  AnalyticsSubnetAz2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref Az2
+      CidrBlock: !Select [9, !Cidr [ !Ref VpcCidr, 20, 4 ]]
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-analytics-b' }, { Key: Tier, Value: analytics }]
+
+  AnalyticsSubnetAz3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref Az3
+      CidrBlock: !Select [14, !Cidr [ !Ref VpcCidr, 20, 4 ]]
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-analytics-c' }, { Key: Tier, Value: analytics }]
+
+  # ---------------- Route tables ----------------
+  PublicRT:
+    Type: AWS::EC2::RouteTable
+    Properties: { VpcId: !Ref VPC, Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-public-rt' }] }
+
+  PublicDefaultRoute:
     Type: AWS::EC2::Route
-    Properties: { RouteTableId: !Ref RtPublic, DestinationCidrBlock: 0.0.0.0/0, GatewayId: !Ref IGW }
-
-  AppAz1Default:
-    Type: AWS::EC2::Route
     Properties:
-      RouteTableId: !Ref RtAppAz1
+      RouteTableId: !Ref PublicRT
       DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NatGw1
+      GatewayId: !Ref IGW
+    DependsOn: VpcIgwAttachment
 
-  AppAz2Default:
+  PublicAssocA: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref PublicSubnetAz1, RouteTableId: !Ref PublicRT } }
+  PublicAssocB: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref PublicSubnetAz2, RouteTableId: !Ref PublicRT } }
+  PublicAssocC: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref PublicSubnetAz3, RouteTableId: !Ref PublicRT } }
+
+  # NAT(s): 1 shared (cost saver) or 1 per AZ (HA)
+  NatEipA: { Type: AWS::EC2::EIP, Condition: UseNatPerAz, Properties: { Domain: vpc } }
+  NatA:
+    Type: AWS::EC2::NatGateway
+    Condition: UseNatPerAz
+    Properties:
+      AllocationId: !GetAtt NatEipA.AllocationId
+      SubnetId: !Ref PublicSubnetAz1
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-nat-a' }]
+
+  NatEipB: { Type: AWS::EC2::EIP, Condition: UseNatPerAz, Properties: { Domain: vpc } }
+  NatB:
+    Type: AWS::EC2::NatGateway
+    Condition: UseNatPerAz
+    Properties:
+      AllocationId: !GetAtt NatEipB.AllocationId
+      SubnetId: !Ref PublicSubnetAz2
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-nat-b' }]
+
+  NatEipC: { Type: AWS::EC2::EIP, Condition: UseNatPerAz, Properties: { Domain: vpc } }
+  NatC:
+    Type: AWS::EC2::NatGateway
+    Condition: UseNatPerAz
+    Properties:
+      AllocationId: !GetAtt NatEipC.AllocationId
+      SubnetId: !Ref PublicSubnetAz3
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-nat-c' }]
+
+  # Single-NAT pattern (dev cost saver)
+  NatEipSingle: { Type: AWS::EC2::EIP, Condition: !Not [ !Equals [ !Ref NatPerAz, "true" ] ], Properties: { Domain: vpc } }
+  NatSingle:
+    Type: AWS::EC2::NatGateway
+    Condition: !Not [ !Equals [ !Ref NatPerAz, "true" ] ]
+    Properties:
+      AllocationId: !GetAtt NatEipSingle.AllocationId
+      SubnetId: !Ref PublicSubnetAz1
+      Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-nat' }]
+
+  # Private route tables per AZ (app & analytics share; data uses same unless you want no-NAT)
+  PrivateRTA: { Type: AWS::EC2::RouteTable, Properties: { VpcId: !Ref VPC, Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-priv-a' }] } }
+  PrivateRTB: { Type: AWS::EC2::RouteTable, Properties: { VpcId: !Ref VPC, Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-priv-b' }] } }
+  PrivateRTC: { Type: AWS::EC2::RouteTable, Properties: { VpcId: !Ref VPC, Tags: [{ Key: Name, Value: !Sub '${NamePrefix}-priv-c' }] } }
+
+  PrivateDefaultA:
     Type: AWS::EC2::Route
     Properties:
-      RouteTableId: !Ref RtAppAz2
+      RouteTableId: !Ref PrivateRTA
       DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !If [ OneNatOnly, !Ref NatGw1, !Ref NatGw2 ]
+      NatGatewayId: !If [ UseNatPerAz, !Ref NatA, !Ref NatSingle ]
 
-  AppAz3Default:
+  PrivateDefaultB:
     Type: AWS::EC2::Route
     Properties:
-      RouteTableId: !Ref RtAppAz3
+      RouteTableId: !Ref PrivateRTB
       DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !If [ OneNatOnly, !Ref NatGw1, !Ref NatGw3 ]
+      NatGatewayId: !If [ UseNatPerAz, !Ref NatB, !Ref NatSingle ]
 
-  # ---------- Assoc subnets to RTs ----------
-  AssocPub1: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref PubAz1, RouteTableId: !Ref RtPublic } }
-  AssocPub2: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref PubAz2, RouteTableId: !Ref RtPublic } }
-  AssocPub3: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref PubAz3, RouteTableId: !Ref RtPublic } }
+  PrivateDefaultC:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRTC
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !If [ UseNatPerAz, !Ref NatC, !Ref NatSingle ]
 
-  AssocApp1: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref AppAz1, RouteTableId: !Ref RtAppAz1 } }
-  AssocApp2: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref AppAz2, RouteTableId: !Ref RtAppAz2 } }
-  AssocApp3: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref AppAz3, RouteTableId: !Ref RtAppAz3 } }
+  # Associate app+analytics subnets to private RTs (data can share; tighten later if needed)
+  AppAssocA: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref AppSubnetAz1, RouteTableId: !Ref PrivateRTA } }
+  AppAssocB: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref AppSubnetAz2, RouteTableId: !Ref PrivateRTB } }
+  AppAssocC: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref AppSubnetAz3, RouteTableId: !Ref PrivateRTC } }
 
-  AssocData1: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref DataAz1, RouteTableId: !Ref RtDataAz1 } }
-  AssocData2: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref DataAz2, RouteTableId: !Ref RtDataAz2 } }
-  AssocData3: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref DataAz3, RouteTableId: !Ref RtDataAz3 } }
+  AnalyticsAssocA: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref AnalyticsSubnetAz1, RouteTableId: !Ref PrivateRTA } }
+  AnalyticsAssocB: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref AnalyticsSubnetAz2, RouteTableId: !Ref PrivateRTB } }
+  AnalyticsAssocC: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref AnalyticsSubnetAz3, RouteTableId: !Ref PrivateRTC } }
 
-  AssocAna1: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref AnaAz1, RouteTableId: !Ref RtAnaAz1 } }
-  AssocAna2: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref AnaAz2, RouteTableId: !Ref RtAnaAz2 } }
-  AssocAna3: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref AnaAz3, RouteTableId: !Ref RtAnaAz3 } }
+  DataAssocA: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref DataSubnetAz1, RouteTableId: !Ref PrivateRTA } }
+  DataAssocB: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref DataSubnetAz2, RouteTableId: !Ref PrivateRTB } }
+  DataAssocC: { Type: AWS::EC2::SubnetRouteTableAssociation, Properties: { SubnetId: !Ref DataSubnetAz3, RouteTableId: !Ref PrivateRTC } }
 
-  # --------- Gateway VPC endpoints (S3 & DynamoDB) on all private+data+analytics RTs ---------
-  S3Endpoint:
+  # --------- Gateway Endpoints (free) for S3 & DynamoDB (private RTs) ---------
+  S3GatewayEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      RouteTableIds: [ !Ref PrivateRTA, !Ref PrivateRTB, !Ref PrivateRTC ]
       VpcEndpointType: Gateway
-      VpcId: !Ref Vpc
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
-      RouteTableIds: [ !Ref RtAppAz1, !Ref RtAppAz2, !Ref RtAppAz3, !Ref RtDataAz1, !Ref RtDataAz2, !Ref RtDataAz3, !Ref RtAnaAz1, !Ref RtAnaAz2, !Ref RtAnaAz3 ]
-      Tags: [{Key: Name, Value: !Sub '${NamePrefix}-s3-gw' }]
 
-  DdbEndpoint:
+  DdbGatewayEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.dynamodb'
+      RouteTableIds: [ !Ref PrivateRTA, !Ref PrivateRTB, !Ref PrivateRTC ]
       VpcEndpointType: Gateway
-      VpcId: !Ref Vpc
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.dynamodb
-      RouteTableIds: [ !Ref RtAppAz1, !Ref RtAppAz2, !Ref RtAppAz3, !Ref RtDataAz1, !Ref RtDataAz2, !Ref RtDataAz3, !Ref RtAnaAz1, !Ref RtAnaAz2, !Ref RtAnaAz3 ]
-      Tags: [{Key: Name, Value: !Sub '${NamePrefix}-ddb-gw' }]
 
 Outputs:
-  VpcId:                 { Value: !Ref Vpc, Export: { Name: !Sub '${AWS::StackName}-VpcId' } }
-  PublicSubnets:         { Value: !Join [",", [!Ref PubAz1, !Ref PubAz2, !Ref PubAz3]], Export: { Name: !Sub '${AWS::StackName}-PublicSubnets' } }
-  AppPrivateSubnets:     { Value: !Join [",", [!Ref AppAz1, !Ref AppAz2, !Ref AppAz3]], Export: { Name: !Sub '${AWS::StackName}-AppPrivateSubnets' } }
-  DataIsolatedSubnets:   { Value: !Join [",", [!Ref DataAz1, !Ref DataAz2, !Ref DataAz3]], Export: { Name: !Sub '${AWS::StackName}-DataIsolatedSubnets' } }
-  EndpointSubnets:       { Value: !Join [",", [!Ref EpAz1, !Ref EpAz2, !Ref EpAz3]], Export: { Name: !Sub '${AWS::StackName}-EndpointSubnets' } }
-  AnalyticsSubnets:      { Value: !Join [",", [!Ref AnaAz1, !Ref AnaAz2, !Ref AnaAz3]], Export: { Name: !Sub '${AWS::StackName}-AnalyticsSubnets' } }
+  VpcId:                    { Value: !Ref VPC }
+  PublicSubnets:            { Value: !Join [',', [ !Ref PublicSubnetAz1, !Ref PublicSubnetAz2, !Ref PublicSubnetAz3 ]] }
+  AppSubnets:               { Value: !Join [',', [ !Ref AppSubnetAz1, !Ref AppSubnetAz2, !Ref AppSubnetAz3 ]] }
+  DataSubnets:              { Value: !Join [',', [ !Ref DataSubnetAz1, !Ref DataSubnetAz2, !Ref DataSubnetAz3 ]] }
+  EndpointSubnets:          { Value: !Join [',', [ !Ref EpSubnetAz1, !Ref EpSubnetAz2, !Ref EpSubnetAz3 ]] }
+  AnalyticsSubnets:         { Value: !Join [',', [ !Ref AnalyticsSubnetAz1, !Ref AnalyticsSubnetAz2, !Ref AnalyticsSubnetAz3 ]] }

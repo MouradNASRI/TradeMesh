@@ -1,0 +1,11 @@
+version: 0.2
+phases:
+  build:
+    commands:
+      - echo "Repo tree at build time:" && ls -R
+artifacts:
+  files:
+    - cloudformation/stacks/**/*.yml
+    - cloudformation/stacks/**/*.yaml
+    - cloudformation/envs/**/*.json
+  discard-paths: no   # keep directories so CFN paths match

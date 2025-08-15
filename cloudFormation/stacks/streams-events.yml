@@ -1,63 +1,55 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Trading Platform — Streams & Events (Kinesis, EventBridge, SQS, alarms, scheduler DLQ/retries)
+Description: >
+  TradeMesh — Streams & Events.
+  Kinesis (ticks), EventBridge app bus, Scheduler heartbeat (DLQ+retries),
+  SQS (events + DLQ), rule for routing, CloudWatch iterator-age alarm.
 
-# -------------------------
-# Parameters (tunable)
-# -------------------------
 Parameters:
   NamePrefix:              { Type: String, Default: trd }
-  StreamShardCount:        { Type: Number, Default: 1, MinValue: 1 }     # dev: 1 shard; scale later
+  StreamShardCount:        { Type: Number, Default: 1, MinValue: 1 }
   StreamRetentionHours:    { Type: Number, Default: 24, MinValue: 24, MaxValue: 8760 }
   EventBusName:            { Type: String, Default: trd-app-bus }
 
-  # Alarms / heartbeat knobs
   CreateAlarms:            { Type: String, AllowedValues: [true,false], Default: true }
   EnableHeartbeat:         { Type: String, AllowedValues: [true,false], Default: true }
-  HeartbeatRate:           { Type: String, Default: 'rate(5 minutes)' }  # e.g., cron(0/5 * * * ? *)
+  HeartbeatRate:           { Type: String, Default: 'rate(5 minutes)' }
 
-  # Scheduler hardening
   CreateSchedulerDLQ:      { Type: String, AllowedValues: [true,false], Default: true }
   SchedulerMaxRetryAttempts:      { Type: Number, Default: 2, MinValue: 0, MaxValue: 185 }
   SchedulerMaxEventAgeSeconds:    { Type: Number, Default: 3600, MinValue: 60, MaxValue: 86400 }
 
-# -------------------------
-# Conditions
-# -------------------------
 Conditions:
   DoAlarms:        !Equals [!Ref CreateAlarms, "true"]
   DoHeartbeat:     !Equals [!Ref EnableHeartbeat, "true"]
   HasSchedulerDLQ: !Equals [!Ref CreateSchedulerDLQ, "true"]
 
-# -------------------------
-# Resources
-# -------------------------
 Resources:
 
-  # --- Kinesis: raw ticks stream (keep small in dev; add shards on load)
+  # --- Kinesis: raw ticks stream (encrypted, low idle cost at 1 shard)
   TicksStream:
     Type: AWS::Kinesis::Stream
     Properties:
       Name: !Sub '${NamePrefix}-ticks'
       ShardCount: !Ref StreamShardCount
       RetentionPeriodHours: !Ref StreamRetentionHours
-      StreamEncryption:                    # encryption at rest (AWS-managed KMS)
+      StreamEncryption:
         EncryptionType: KMS
         KeyId: alias/aws/kinesis
 
-  # --- EventBridge: dedicated app bus (domain events)
+  # --- EventBridge: dedicated app bus (keeps domain events off default bus)
   AppBus:
     Type: AWS::Events::EventBus
     Properties:
       Name: !Ref EventBusName
 
-  # --- Scheduler DLQ (optional): captures failed schedule deliveries
+  # --- Optional DLQ for Scheduler (captures publish failures)
   SchedulerDLQ:
     Type: AWS::SQS::Queue
     Condition: HasSchedulerDLQ
     Properties:
       QueueName: !Sub '${NamePrefix}-scheduler-dlq'
 
-  # --- IAM role: Scheduler -> PutEvents on AppBus (+ SQS send if DLQ is enabled)
+  # --- IAM role for Scheduler to publish to the app bus (and DLQ if needed)
   SchedulerToEventsRole:
     Type: AWS::IAM::Role
     Properties:
@@ -68,27 +60,27 @@ Resources:
             Principal: { Service: scheduler.amazonaws.com }
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: PutEventsAndDLQ
+        - PolicyName: PutToBusAndDLQ
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Sid: PutToAppBus
+              - Sid: PutToBus
                 Effect: Allow
                 Action: events:PutEvents
                 Resource: !GetAtt AppBus.Arn
-              - Sid: SendToSchedulerDLQ
+              - Sid: ToSchedulerDLQ
                 Effect: Allow
                 Action: sqs:SendMessage
                 Resource: !If [HasSchedulerDLQ, !GetAtt SchedulerDLQ.Arn, !Ref 'AWS::NoValue' ]
 
-  # --- Heartbeat event producer (Scheduler -> AppBus), hardened with DLQ & retries
+  # --- Heartbeat: Scheduler -> AppBus with DLQ + retries (synthetic health/cron)
   HeartbeatScheduleToBus:
     Type: AWS::Scheduler::Schedule
     Condition: DoHeartbeat
     Properties:
       Name: !Sub '${NamePrefix}-heartbeat-5m'
       State: ENABLED
-      FlexibleTimeWindow: { Mode: "OFF" }          # fire on time; add jitter by widening this window
+      FlexibleTimeWindow: { Mode: "OFF" }    # quote "OFF" to avoid YAML bool pitfalls
       ScheduleExpression: !Ref HeartbeatRate
       Target:
         Arn: !GetAtt AppBus.Arn
@@ -96,19 +88,19 @@ Resources:
         EventBridgeParameters:
           DetailType: heartbeat
           Source: trd.heartbeat
-        Input: '{"interval":"5m"}'               # goes to event.detail
-        DeadLetterConfig:                        # optional DLQ for failed deliveries
+        Input: '{"interval":"5m"}'
+        DeadLetterConfig:
           Arn: !If [HasSchedulerDLQ, !GetAtt SchedulerDLQ.Arn, !Ref 'AWS::NoValue' ]
-        RetryPolicy:                             # basic retry/backoff guardrails
+        RetryPolicy:
           MaximumEventAgeInSeconds: !Ref SchedulerMaxEventAgeSeconds
           MaximumRetryAttempts: !Ref SchedulerMaxRetryAttempts
 
-  # --- SQS: app events queue (+ DLQ for consumer failures)
+  # --- SQS: app events queue + DLQ (consumer failures)
   DeadLetterQueue:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: !Sub '${NamePrefix}-signals-dlq'
-      MessageRetentionPeriod: 1209600            # 14 days
+      MessageRetentionPeriod: 1209600  # 14 days
 
   HeartbeatQueue:
     Type: AWS::SQS::Queue
@@ -118,7 +110,7 @@ Resources:
         deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
         maxReceiveCount: 5
 
-  # --- IAM role: EventBridge Rule -> SQS (least privilege)
+  # --- EventBridge Rule: route heartbeat events from AppBus -> SQS
   EventsToSqsRole:
     Type: AWS::IAM::Role
     Properties:
@@ -137,7 +129,6 @@ Resources:
                 Action: sqs:SendMessage
                 Resource: !GetAtt HeartbeatQueue.Arn
 
-  # --- Rule: route heartbeat events from AppBus -> SQS
   HeartbeatBusToQueueRule:
     Type: AWS::Events::Rule
     Properties:
@@ -151,7 +142,7 @@ Resources:
           Arn: !GetAtt HeartbeatQueue.Arn
           RoleArn: !GetAtt EventsToSqsRole.Arn
 
-  # --- SQS policy: allow ONLY this rule to send to the queue
+  # --- Queue policy: allow only this rule to send to the queue (least privilege)
   HeartbeatQueuePolicy:
     Type: AWS::SQS::QueuePolicy
     Properties:
@@ -168,7 +159,7 @@ Resources:
               ArnEquals:
                 aws:SourceArn: !GetAtt HeartbeatBusToQueueRule.Arn
 
-  # --- CloudWatch Alarm: Kinesis consumer lag (optional)
+  # --- CloudWatch alarm: Kinesis consumer lag (iterator age)
   IteratorAgeAlarm:
     Type: AWS::CloudWatch::Alarm
     Condition: DoAlarms
@@ -187,15 +178,9 @@ Resources:
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
 
-# -------------------------
-# Outputs (feed other stacks)
-# -------------------------
 Outputs:
-  TicksStreamName: { Value: !Ref TicksStream, Export: { Name: !Sub '${AWS::StackName}-TicksStreamName' } }
-  TicksStreamArn:  { Value: !GetAtt TicksStream.Arn, Export: { Name: !Sub '${AWS::StackName}-TicksStreamArn' } }
-  EventBusArn:     { Value: !GetAtt AppBus.Arn, Export: { Name: !Sub '${AWS::StackName}-EventBusArn' } }
+  TicksStreamName:   { Value: !Ref TicksStream }
+  TicksStreamArn:    { Value: !GetAtt TicksStream.Arn }
+  EventBusArn:       { Value: !GetAtt AppBus.Arn }
   HeartbeatQueueUrl: { Value: !Ref HeartbeatQueue }
   DLQUrl:            { Value: !Ref DeadLetterQueue }
-  SchedulerDLQUrl:
-    Condition: HasSchedulerDLQ
-    Value: !Ref SchedulerDLQ

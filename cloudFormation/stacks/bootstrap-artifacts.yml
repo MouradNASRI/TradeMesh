@@ -1,39 +1,88 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Bootstrap - KMS + S3 artifact bucket (versioned, SSE-KMS, TLS-only)
+Description: >
+  TradeMesh — Bootstrap (Artifacts S3 + KMS).
+  Creates a private, encrypted artifacts bucket and a CMK with least-privilege policies
+  for CodePipeline/CodeBuild/CloudFormation. Safe defaults: block public access, versioning,
+  SSE-KMS required, DeletionPolicy: Retain.
 
+# =========================
+# Parameters (tunable)
+# =========================
 Parameters:
-  BucketName:
-    Type: String
-    Description: Globally-unique S3 bucket name for CI/CD artifacts
   NamePrefix:
     Type: String
     Default: trd
-  EnableVersioning:
-    Type: String
-    AllowedValues: [Enabled, Suspended]
-    Default: Enabled
+    Description: Short name used in resource names (lowercase, dns-safe)
 
+  # IAM roles that will use the CMK (can be created by your IAM stack).
+  CodePipelineRoleArn:
+    Type: String
+    Description: IAM role ARN used by CodePipeline to read/write artifacts
+  CodeBuildRoleArn:
+    Type: String
+    Description: IAM role ARN used by CodeBuild (build stage)
+  CloudFormationExecRoleArn:
+    Type: String
+    Description: IAM role ARN assumed by CFN actions (Create/Execute ChangeSet)
+  KmsAdminPrincipalArn:
+    Type: String
+    Default: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+    Description: Principal with admin on the CMK (e.g., an admin role or account root)
+
+  # Optional access logging (server access logs) to a dedicated bucket
+  EnableAccessLogs:
+    Type: String
+    AllowedValues: [ "true", "false" ]
+    Default: "false"
+  AccessLogsBucketName:
+    Type: String
+    Default: ""
+    Description: Leave empty to auto-name; must be in same account/region
+
+# =========================
+# Conditions
+# =========================
+Conditions:
+  DoAccessLogs: !Equals [ !Ref EnableAccessLogs, "true" ]
+  HasCustomLogsName: !And
+    - !Equals [ !Ref EnableAccessLogs, "true" ]
+    - !Not [ !Equals [ !Ref AccessLogsBucketName, "" ] ]
+
+# =========================
+# Resources
+# =========================
 Resources:
-  ArtifactKey:
+
+  # -----------------------------------------
+  # KMS CMK for artifacts encryption
+  #  - Least-privilege key policy for CI/CD roles
+  #  - Alias for easy reference
+  # -----------------------------------------
+  ArtifactsKey:
     Type: AWS::KMS::Key
+    DeletionPolicy: Retain                  # never lose access to encrypted data
+    UpdateReplacePolicy: Retain
     Properties:
-      Description: !Sub '${NamePrefix} CI/CD artifacts CMK'
+      Description: !Sub '${NamePrefix} artifacts CMK for CodePipeline/CodeBuild/CFN'
       EnableKeyRotation: true
+      MultiRegion: false
       KeyPolicy:
         Version: '2012-10-17'
         Statement:
-          # Admins in this account can manage the key
-          - Sid: AllowRootAccountAdmin
+          # Key admin (can manage key policy/rotation)
+          - Sid: KeyAdmin
             Effect: Allow
-            Principal:
-              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Principal: { AWS: !Ref KmsAdminPrincipalArn }
             Action: 'kms:*'
             Resource: '*'
-          # Allow principals in this account to use the key (grant usage; IAM policies will further scope)
-          - Sid: AllowAccountUseOfKey
+          # CI/CD roles may encrypt/decrypt artifacts
+          - Sid: UseByCICDRoles
             Effect: Allow
             Principal:
-              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+              AWS:
+                - !Ref CodePipelineRoleArn
+                - !Ref CodeBuildRoleArn
+                - !Ref CloudFormationExecRoleArn
             Action:
               - kms:Encrypt
               - kms:Decrypt
@@ -41,65 +90,139 @@ Resources:
               - kms:GenerateDataKey*
               - kms:DescribeKey
             Resource: '*'
-      Tags:
-        - { Key: Name, Value: !Sub '${NamePrefix}-artifacts-kms' }
 
-  ArtifactKeyAlias:
+  ArtifactsKeyAlias:
     Type: AWS::KMS::Alias
     Properties:
       AliasName: !Sub 'alias/${NamePrefix}-artifacts'
-      TargetKeyId: !Ref ArtifactKey
+      TargetKeyId: !Ref ArtifactsKey
 
-  ArtifactBucket:
+  # -----------------------------------------
+  # (Optional) Access logs bucket (S3 server access logging target)
+  #  - Separate bucket to avoid recursive logging
+  #  - Minimal policy for S3 log delivery
+  # -----------------------------------------
+  AccessLogsBucket:
+    Condition: DoAccessLogs
     Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Ref BucketName
-      VersioningConfiguration:
-        Status: !Ref EnableVersioning
+      BucketName: !If
+        - HasCustomLogsName
+        - !Ref AccessLogsBucketName
+        - !Sub '${NamePrefix}-logs-${AWS::AccountId}-${AWS::Region}'
+      OwnershipControls: { Rules: [ { ObjectOwnership: BucketOwnerEnforced } ] }  # ACLs disabled
       PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
+        BlockPublicAcls:  true
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      VersioningConfiguration: { Status: Enabled }
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - BucketKeyEnabled: true
-            ServerSideEncryptionByDefault:
-              SSEAlgorithm: aws:kms
-              KMSMasterKeyID: !Ref ArtifactKey
-      Tags:
-        - { Key: Name, Value: !Sub '${NamePrefix}-artifacts-bucket' }
+            ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }  # logs are not sensitive; SSE-S3 is fine
 
-  ArtifactBucketPolicy:
+  AccessLogsBucketPolicy:
+    Condition: DoAccessLogs
     Type: AWS::S3::BucketPolicy
     Properties:
-      Bucket: !Ref ArtifactBucket
+      Bucket: !Ref AccessLogsBucket
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
+          # Allow S3 to write logs with bucket-owner-full-control
+          - Sid: AWSLogDeliveryWrite
+            Effect: Allow
+            Principal: { Service: logging.s3.amazonaws.com }
+            Action: s3:PutObject
+            Resource: !Sub '${AccessLogsBucket.Arn}/AWSLogs/${AWS::AccountId}/*'
+            Condition:
+              StringEquals: { 's3:x-amz-acl': 'bucket-owner-full-control' }
+          - Sid: AWSLogDeliveryAclCheck
+            Effect: Allow
+            Principal: { Service: logging.s3.amazonaws.com }
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt AccessLogsBucket.Arn
+
+  # -----------------------------------------
+  # Artifacts bucket (the one CodePipeline uses)
+  #  - Private, versioned, SSE-KMS with our CMK
+  #  - Public access blocked; TLS-only; SSE-KMS required (with our key)
+  # -----------------------------------------
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub '${NamePrefix}-artifacts-${AWS::AccountId}-${AWS::Region}'
+      OwnershipControls: { Rules: [ { ObjectOwnership: BucketOwnerEnforced } ] }  # modern best practice
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls:  true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration: { Status: Enabled }
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: true                 # reduces KMS API calls (cost/latency)
+            ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref ArtifactsKey
+      LoggingConfiguration:                         # optional log delivery to separate bucket
+        !If
+          - DoAccessLogs
+          - { DestinationBucketName: !Ref AccessLogsBucket, LogFilePrefix: !Sub 's3-access/${AWS::Region}/' }
+          - !Ref 'AWS::NoValue'
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortIncompleteMultipart
+            Status: Enabled
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 }  # hygiene
+
+  ArtifactsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Deny any request not using HTTPS
           - Sid: DenyInsecureTransport
             Effect: Deny
             Principal: "*"
-            Action: 's3:*'
-            Resource:-
-              - !Sub '${ArtifactBucket.Arn}'
-              - !Sub '${ArtifactBucket.Arn}/*'
+            Action: "s3:*"
+            Resource:
+              - !GetAtt ArtifactsBucket.Arn
+              - !Sub '${ArtifactsBucket.Arn}/*'
             Condition:
-              Bool:
-                aws:SecureTransport: false
+              Bool: { 'aws:SecureTransport': 'false' }
 
+          # Require SSE-KMS on PUTs (with *our* CMK)
+          - Sid: RequireKmsEncryptionWithOurKey
+            Effect: Deny
+            Principal: "*"
+            Action: s3:PutObject
+            Resource: !Sub '${ArtifactsBucket.Arn}/*'
+            Condition:
+              StringNotEquals:
+                s3:x-amz-server-side-encryption: aws:kms
+              # NOTE: The additional key-id check enforces THIS CMK only.
+          - Sid: EnforceSpecificKmsKey
+            Effect: Deny
+            Principal: "*"
+            Action: s3:PutObject
+            Resource: !Sub '${ArtifactsBucket.Arn}/*'
+            Condition:
+              StringNotEquals:
+                s3:x-amz-server-side-encryption-aws-kms-key-id: !Ref ArtifactsKey
+
+# =========================
+# Outputs
+# =========================
 Outputs:
-  ArtifactBucketName:
-    Value: !Ref ArtifactBucket
-    Export:
-      Name: !Sub '${AWS::StackName}-ArtifactBucketName'
-  ArtifactBucketArn:
-    Value: !GetAtt ArtifactBucket.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-ArtifactBucketArn'
-  ArtifactKmsKeyArn:
-    Value: !GetAtt ArtifactKey.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-ArtifactKmsKeyArn'
-  ArtifactKmsAlias:
-    Value: !Ref ArtifactKeyAlias
+  ArtifactsBucketName:   { Value: !Ref ArtifactsBucket, Export: { Name: !Sub '${AWS::StackName}-ArtifactsBucketName' } }
+  ArtifactsBucketArn:    { Value: !GetAtt ArtifactsBucket.Arn, Export: { Name: !Sub '${AWS::StackName}-ArtifactsBucketArn' } }
+  ArtifactsKeyArn:       { Value: !GetAtt ArtifactsKey.Arn,    Export: { Name: !Sub '${AWS::StackName}-ArtifactsKeyArn' } }
+  ArtifactsKeyAlias:     { Value: !Ref ArtifactsKeyAlias,      Export: { Name: !Sub '${AWS::StackName}-ArtifactsKeyAlias' } }

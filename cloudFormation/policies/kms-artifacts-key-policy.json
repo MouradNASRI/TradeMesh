@@ -1,0 +1,21 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "Admin",
+      "Effect": "Allow",
+      "Principal": { "AWS": ["arn:aws:iam::ACCOUNT_ID:role/trd-kms-admin-role"] },
+      "Action": ["kms:*"],
+      "Resource": "*"
+    },
+    { "Sid": "UseForArtifacts",
+      "Effect": "Allow",
+      "Principal": { "AWS": [
+        "arn:aws:iam::ACCOUNT_ID:role/trd-codepipeline-role",
+        "arn:aws:iam::ACCOUNT_ID:role/trd-codebuild-role",
+        "arn:aws:iam::ACCOUNT_ID:role/trd-cfn-exec-role"
+      ]},
+      "Action": ["kms:Encrypt","kms:Decrypt","kms:GenerateDataKey*","kms:DescribeKey"],
+      "Resource": "*"
+    }
+  ]
+}

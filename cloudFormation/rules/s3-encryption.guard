@@ -1,0 +1,3 @@
+rule s3_buckets_must_use_kms_when_putting_objects {
+  AWS::S3::Bucket.PolicyDocument.Statement[*].Condition.StringNotEquals."s3:x-amz-server-side-encryption" == "aws:kms"
+}

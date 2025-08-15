@@ -1,9 +1,0 @@
-version: 0.2
-phases:
-  build:
-    commands:
-      - echo "Packaging Networking template"
-artifacts:
-  files:
-    - cloudFormation/stacks/streams-events.yml
-    - cloudFormation/envs/dev/streams-params.json

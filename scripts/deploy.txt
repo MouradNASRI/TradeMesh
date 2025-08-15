@@ -1,0 +1,22 @@
+aws cloudformation deploy \
+  --region us-east-1 \
+  --stack-name trd-bootstrap-artifacts \
+  --template-file cloudformation/stacks/bootstrap-artifacts.yml \
+  --capabilities CAPABILITY_NAMED_IAM
+
+aws cloudformation deploy \
+  --region us-east-1 \
+  --stack-name trd-iam-roles \
+  --template-file cloudformation/stacks/iam-pipeline-roles.yml \
+  --capabilities CAPABILITY_NAMED_IAM
+
+aws cloudformation update-termination-protection --region us-east-1 --stack-name trd-bootstrap-artifacts --enable-termination-protection
+aws cloudformation update-termination-protection --region us-east-1 --stack-name trd-iam-roles --enable-termination-protection
+
+cat > stack-policy-deny-delete.json <<'EOF'
+{ "Statement": [ { "Effect": "Deny", "Action": "Update:Delete", "Principal": "*", "Resource": "*" } ] }
+EOF
+aws cloudformation set-stack-policy --region us-east-1 --stack-name trd-bootstrap-artifacts --stack-policy-body file://stack-policy-deny-delete.json
+aws cloudformation set-stack-policy --region us-east-1 --stack-name trd-iam-roles --stack-policy-body file://stack-policy-deny-delete.json
+
+

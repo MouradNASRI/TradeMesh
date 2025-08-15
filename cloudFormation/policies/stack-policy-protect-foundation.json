@@ -1,0 +1,11 @@
+{
+  "Statement": [
+    {
+      "Effect": "Deny",
+      "Action": ["Update:Delete","Update:Replace"],
+      "Principal": "*",
+      "Resource": "*",
+      "Condition": { "StringEquals": { "LogicalResourceId": ["ArtifactsBucket","ArtifactsKey"] } }
+    }
+  ]
+}

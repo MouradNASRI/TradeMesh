@@ -1,0 +1,36 @@
+{
+  "Parameters": {
+    "PipelineName": "trd-foundation-pipeline",
+
+    "ArtifactBucketName": "trd-artifacts-785032444795-us-east-1",
+    "CodePipelineRoleArn": "arn:aws:iam::785032444795:role/trd-codepipeline-role",
+    "CloudFormationExecutionRoleArn": "arn:aws:iam::785032444795:role/trd-cfn-exec-role",
+    "ArtifactKmsKeyArn": "",
+
+    "ConnectionArn": "arn:aws:codestar-connections:us-east-1:785032444795:connection/b0d6f7d5-3ff1-4136-af55-46bda6041b00",
+    "FullRepositoryId": "MouradNASRI/TradeMesh",
+    "BranchName": "main",
+
+    "CreateBuildProject": "true",
+    "CodeBuildServiceRoleArn": "arn:aws:iam::785032444795:role/trd-codebuild-role",
+    "CodeBuildProjectName": "",
+    "BuildImage": "aws/codebuild/standard:7.0",
+    "BuildComputeType": "BUILD_GENERAL1_SMALL",
+    "LogsGroupName": "/aws/codebuild/trd-pipeline-build",
+
+    "StackNameNetworking": "trd-networking",
+    "NetworkingTemplatePath": "cloudformation/stacks/networking.yml",
+    "NetworkingConfigPath": "cloudformation/envs/dev/networking-params.json",
+    "ChangeSetNameNetworking": "cs-networking",
+
+    "StackNameStreams": "trd-streams",
+    "StreamsTemplatePath": "cloudformation/stacks/streams-events.yml",
+    "StreamsConfigPath": "cloudformation/envs/dev/streams-params.json",
+    "ChangeSetNameStreams": "cs-streams"
+  },
+  "Tags": {
+    "Project": "TradeMesh",
+    "Env": "dev",
+    "Owner": "moura"
+  }
+}

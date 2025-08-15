@@ -1,0 +1,12 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Effect": "Allow", "Action": "*", "Resource": "*",
+      "Condition": { "StringEquals": { "aws:ResourceTag/Project": "TradeMesh" } } },
+    { "Effect": "Allow", "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/trd-*"},
+    { "Effect": "Deny", "Action": ["iam:*","kms:*","s3:DeleteBucket","cloudformation:DeleteStack"],
+      "Resource": "*",
+      "Condition": { "StringNotEquals": { "aws:PrincipalArn": "arn:aws:iam::ACCOUNT_ID:role/trd-cfn-exec-role" } } }
+  ]
+}

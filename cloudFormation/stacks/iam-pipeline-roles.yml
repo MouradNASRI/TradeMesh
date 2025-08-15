@@ -1,22 +1,17 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: IAM roles for CodePipeline, CodeBuild, and CloudFormation execution (artifact bucket SSE-KMS aware)
+Description: TradeMesh — CI/CD IAM (CodePipeline, CodeBuild, CloudFormation execution roles)
 
 Parameters:
-  NamePrefix:
-    Type: String
-    Default: trd
-  ArtifactBucketName:
-    Type: String
-    Description: Name of the artifacts bucket (from bootstrap stack)
-  ArtifactBucketArn:
-    Type: String
-    Description: ARN of the artifacts bucket (from bootstrap stack)
-  ArtifactKmsKeyArn:
-    Type: String
-    Description: KMS CMK ARN used by the artifacts bucket
+  NamePrefix:                    { Type: String, Default: trd }
+  ArtifactBucketName:            { Type: String, Description: Artifacts S3 bucket name }
+  ArtifactKmsKeyArn:             { Type: String, Description: KMS CMK ARN used by the artifacts bucket }
+  ConnectionArn:                 { Type: String, Description: CodeStar/CodeConnections ARN for GitHub }
 
 Resources:
-  # ---------------- CodePipeline service role ----------------
+
+  # ---------------------------
+  # CodePipeline service role
+  # ---------------------------
   CodePipelineRole:
     Type: AWS::IAM::Role
     Properties:
@@ -28,66 +23,63 @@ Resources:
             Principal: { Service: codepipeline.amazonaws.com }
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: cp-s3-kms-cfn-build
+        - PolicyName: PipelineCore
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              # S3 artifact bucket access
-              - Sid: S3Artifacts
-                Effect: Allow
+              # Use GitHub Connection
+              - Effect: Allow
+                Action:
+                  - codestar-connections:UseConnection
+                  - codeconnections:UseConnection
+                Resource: !Ref ConnectionArn
+
+              # Talk to CodeBuild
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                Resource: '*'
+
+              # Create/Execute/Inspect CFN ChangeSets (CFN itself will assume its own exec role)
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:GetTemplate
+                Resource: '*'
+
+              # Read/Write artifacts in S3 + decrypt/encrypt with our CMK
+              - Effect: Allow
                 Action:
                   - s3:GetObject
                   - s3:GetObjectVersion
                   - s3:PutObject
                   - s3:ListBucket
-                  - s3:GetBucketLocation
                 Resource:
-                  - !Ref ArtifactBucketArn
-                  - !Sub '${ArtifactBucketArn}/*'
-              # KMS for SSE-KMS artifacts
-              - Sid: KmsForArtifacts
-                Effect: Allow
+                  - !Sub 'arn:aws:s3:::${ArtifactBucketName}'
+                  - !Sub 'arn:aws:s3:::${ArtifactBucketName}/*'
+              - Effect: Allow
                 Action:
-                  - kms:Encrypt
                   - kms:Decrypt
+                  - kms:Encrypt
                   - kms:ReEncrypt*
                   - kms:GenerateDataKey*
                   - kms:DescribeKey
                 Resource: !Ref ArtifactKmsKeyArn
-              # Start/inspect CodeBuild
-              - Sid: CodeBuild
-                Effect: Allow
-                Action:
-                  - codebuild:StartBuild
-                  - codebuild:BatchGetBuilds
-                Resource: '*'
-              # CloudFormation ChangeSets (the pipeline creates & executes them)
-              - Sid: CloudFormation
-                Effect: Allow
-                Action:
-                  - cloudformation:CreateChangeSet
-                  - cloudformation:DescribeChangeSet
-                  - cloudformation:ExecuteChangeSet
-                  - cloudformation:DeleteChangeSet
-                  - cloudformation:DescribeStacks
-                  - cloudformation:CreateStack
-                  - cloudformation:UpdateStack
-                  - cloudformation:ValidateTemplate
-                Resource: '*'
-              # Pass the CFN execution role and CodeBuild role
-              - Sid: PassRoles
-                Effect: Allow
-                Action: iam:PassRole
-                Resource:
-                  - !GetAtt CloudFormationExecutionRole.Arn
-                  - !GetAtt CodeBuildRole.Arn
-                Condition:
-                  StringLike:
-                    iam:PassedToService:
-                      - cloudformation.amazonaws.com
-                      - codebuild.amazonaws.com
 
-  # ---------------- CodeBuild service role ----------------
+              # Allow passing the CFN execution role to CloudFormation actions
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${NamePrefix}-cfn-exec-role'
+
+  # ---------------------------
+  # CodeBuild service role
+  #  - buildspec does CFN validate + lint + pulls/pushes artifacts
+  # ---------------------------
   CodeBuildRole:
     Type: AWS::IAM::Role
     Properties:
@@ -99,68 +91,98 @@ Resources:
             Principal: { Service: codebuild.amazonaws.com }
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: cb-s3-kms-logs-ecr
+        - PolicyName: BuildPermissions
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              # S3 artifact IO
-              - Sid: S3Artifacts
-                Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:GetObjectVersion
-                  - s3:PutObject
-                  - s3:ListBucket
-                  - s3:GetBucketLocation
-                Resource:
-                  - !Ref ArtifactBucketArn
-                  - !Sub '${ArtifactBucketArn}/*'
-              # KMS for artifact encryption/decryption
-              - Sid: KmsForArtifacts
-                Effect: Allow
-                Action:
-                  - kms:Encrypt
-                  - kms:Decrypt
-                  - kms:ReEncrypt*
-                  - kms:GenerateDataKey*
-                  - kms:DescribeKey
-                Resource: !Ref ArtifactKmsKeyArn
-              # CloudWatch Logs for build logs
-              - Sid: Logs
-                Effect: Allow
+              # Write logs
+              - Effect: Allow
                 Action:
                   - logs:CreateLogGroup
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: '*'
-              # (Optional) ECR auth for future container builds
-              - Sid: EcrAuth
-                Effect: Allow
-                Action: ecr:GetAuthorizationToken
+              # CFN validation
+              - Effect: Allow
+                Action:
+                  - cloudformation:ValidateTemplate
                 Resource: '*'
+              # S3 artifacts + KMS
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${ArtifactBucketName}'
+                  - !Sub 'arn:aws:s3:::${ArtifactBucketName}/*'
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:Encrypt
+                  - kms:ReEncrypt*
+                  - kms:GenerateDataKey*
+                  - kms:DescribeKey
+                Resource: !Ref ArtifactKmsKeyArn
 
-  # ---------------- CloudFormation execution role ----------------
-  CloudFormationExecutionRole:
+  # ---------------------------
+  # CloudFormation execution role
+  #  - CFN assumes this role during Create/Execute ChangeSet to create your resources
+  #  - Broad but stack-scoped in practice; tighten over time if desired
+  # ---------------------------
+  CloudFormationExecRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${NamePrefix}-cfn-execution-role'
+      RoleName: !Sub '${NamePrefix}-cfn-exec-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal: { Service: cloudformation.amazonaws.com }
             Action: sts:AssumeRole
-      # NOTE: Start with Admin to unblock; tighten to least-priv per target resources later.
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AdministratorAccess
+      Policies:
+        - PolicyName: CFNCreateInfrastructure
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Core infra (VPC/NAT/RT/Subnets/IGW/VPC Endpoints)
+              - Effect: Allow
+                Action:
+                  - ec2:*
+                Resource: '*'
+              # Kinesis / EventBridge / Scheduler / SQS / CloudWatch
+              - Effect: Allow
+                Action:
+                  - kinesis:*
+                  - events:*
+                  - scheduler:*
+                  - sqs:*
+                  - logs:*
+                  - cloudwatch:*
+                Resource: '*'
+              # IAM (only what CFN needs to create/attach inline policies and pass roles)
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PassRole
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${NamePrefix}-*'
+              # KMS usage for encrypting resources created by stacks (optional)
+              - Effect: Allow
+                Action:
+                  - kms:Encrypt
+                  - kms:Decrypt
+                  - kms:ReEncrypt*
+                  - kms:GenerateDataKey*
+                  - kms:DescribeKey
+                Resource: '*'
 
 Outputs:
-  CodePipelineRoleArn:
-    Value: !GetAtt CodePipelineRole.Arn
-    Export: { Name: !Sub '${AWS::StackName}-CodePipelineRoleArn' }
-  CodeBuildRoleArn:
-    Value: !GetAtt CodeBuildRole.Arn
-    Export: { Name: !Sub '${AWS::StackName}-CodeBuildRoleArn' }
-  CloudFormationExecutionRoleArn:
-    Value: !GetAtt CloudFormationExecutionRole.Arn
-    Export: { Name: !Sub '${AWS::StackName}-CloudFormationExecutionRoleArn' }
+  CodePipelineRoleArn:         { Value: !GetAtt CodePipelineRole.Arn }
+  CodeBuildRoleArn:            { Value: !GetAtt CodeBuildRole.Arn }
+  CloudFormationExecutionRoleArn: { Value: !GetAtt CloudFormationExecRole.Arn }
