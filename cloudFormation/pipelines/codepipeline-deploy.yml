@@ -20,7 +20,7 @@ Parameters:
 
   # GitHub source via CodeStar/CodeConnections
   ConnectionArn:                 { Type: String, Description: CodeStar/CodeConnections ARN (Region must match pipeline) }
-  FullRepositoryId:              { Type: String, Description: GitHub org/repo, e.g., MouradNASRI/TradeMesh }
+  FullRepositoryId:              { Type: String, Description: GitHub org/repo, Default: MouradNASRI/TradeMesh }
   BranchName:                    { Type: String, Default: main }
 
   # CodeBuild project (created here or referenced)
