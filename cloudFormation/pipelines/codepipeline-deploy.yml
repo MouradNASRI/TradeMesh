@@ -8,12 +8,12 @@ Description: >
 # =========================
 Parameters:
   # Pipeline identity
-  PipelineName:                  { Type: String, Default: trd-foundation-pipeline }
+  PipelineName:                   { Type: String, Default: trd-foundation-pipeline }
 
   # Artifact store (S3) & roles (created in your bootstrap/IAM stacks)
-  ArtifactBucketName:            { Type: String, Description: S3 bucket for CodePipeline artifacts }
-  CodePipelineRoleArn:           { Type: String, Description: IAM role assumed by CodePipeline }
-  CloudFormationExecutionRoleArn:{ Type: String, Description: IAM role used by CFN actions }
+  ArtifactBucketName:             { Type: String, Description: S3 bucket for CodePipeline artifacts }
+  CodePipelineRoleArn:            { Type: String, Description: IAM role assumed by CodePipeline }
+  CloudFormationExecutionRoleArn: { Type: String, Description: IAM role used by CFN actions }
 
   # (Optional) KMS key to encrypt artifacts at rest in CodePipeline
   ArtifactKmsKeyArn:             { Type: String, Default: "", Description: Optional CMK ARN for artifact encryption }
