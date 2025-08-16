@@ -161,23 +161,13 @@ aws cloudformation deploy \
 aws cloudformation describe-stacks --region us-east-1 \
   --stack-name trd-codepipeline-github --query 'Stacks[0].StackStatus'
 
-EXEC_ID=$(aws codepipeline start-pipeline-execution \
-  --name trd-foundation-pipeline \
-  --query pipelineExecutionId --output text)
 
-aws codepipeline get-pipeline-execution \
-  --pipeline-name trd-foundation-pipeline --pipeline-execution-id "$EXEC_ID" \
-  --query 'pipelineExecution.status'
 
 aws cloudformation describe-stack-events \
   --region us-east-1 \
   --stack-name trd-streams \
   --query "StackEvents[?contains(ResourceStatus,'FAILED') || contains(ResourceStatus,'ROLLBACK')].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]" \
   --output table
-
-aws cloudformation delete-stack --region us-east-1 --stack-name trd-codepipeline-deploy
-
-aws cloudformation wait stack-delete-complete --region us-east-1 --stack-name trd-codepipeline-deploy
 
 
 #Test of what has been done so far:
@@ -308,3 +298,24 @@ aws cloudformation deploy \
     StreamsConfigPath=cloudformation/envs/dev/streams-params.json \
     ChangeSetNameStreams=cs-streams \
   --capabilities CAPABILITY_NAMED_IAM
+
+  aws codebuild create-project \
+  --region us-east-1 \
+  --name trd-foundation-pipeline-build \
+  --source type=CODEPIPELINE \
+  --artifacts type=CODEPIPELINE \
+  --environment computeType=BUILD_GENERAL1_SMALL,image=aws/codebuild/standard:7.0,type=LINUX_CONTAINER \
+  --service-role "$CB_ROLE_ARN"
+
+EXEC_ID=$(aws codepipeline start-pipeline-execution \
+  --name trd-foundation-pipeline \
+  --query pipelineExecutionId --output text)
+
+aws codepipeline get-pipeline-execution \
+  --pipeline-name trd-foundation-pipeline --pipeline-execution-id "$EXEC_ID" \
+  --query 'pipelineExecution.status'
+
+aws cloudformation delete-stack --region us-east-1 --stack-name trd-codepipeline-deploy
+
+aws cloudformation wait stack-delete-complete --region us-east-1 --stack-name trd-codepipeline-deploy
+
