@@ -88,7 +88,7 @@ Resources:
           Status: ENABLED
       Source:
         Type: CODEPIPELINE
-        #BuildSpec: buildspecs/buildspec.deploy.yml
+        BuildSpec: buildspecs/buildspec-deploy.yml
       TimeoutInMinutes: 30
 
   # -----------------------------------------
@@ -130,7 +130,7 @@ Resources:
               ActionTypeId: { Category: Build, Owner: AWS, Provider: CodeBuild, Version: '1' }
               Configuration:
                 ProjectName: !If [ CreateBuildProjectCond, !Ref BuildProject, !Ref CodeBuildProjectName ]
-                BuildspecOverride: buildspecs/buildspec.deploy.yml   # ensures paths & files we expect
+                BuildspecOverride: buildspecs/buildspec-deploy.yml   # ensures paths & files we expect
                 PrimarySource: SourceArtifact
               InputArtifacts:  [ { Name: SourceArtifact } ]
               OutputArtifacts: [ { Name: BuildArtifact } ]
