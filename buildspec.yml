@@ -1,0 +1,124 @@
+version: 0.2
+
+env:
+  variables:
+    CFN_DIR: cloudformation                # where your CFN lives
+    RULES_DIR: cloudformation/rules        # put your cfn-guard *.guard rules here (optional)
+    CFN_GUARD_VERSION: ""                  # set to a version like "3.0.0" to pin; empty = latest
+
+phases:
+  install:
+    commands:
+      - set -euo pipefail
+      - echo ">> Tooling versions (pre-install)"
+      - aws --version || true
+      - python --version || true
+      - ruby --version || true
+      - gem --version || true
+      - cfn-lint --version || true
+      - cfn_nag_scan --version || true
+      - cfn-guard --version || true
+
+      # ---- Install cfn-lint (YAML/CFN schema validation)
+      - echo ">> Installing cfn-lint"
+      - pip install --quiet --upgrade pip || true
+      - pip install --quiet cfn-lint || true
+
+      # ---- Install Ruby (if missing) and cfn-nag (security best-practices)
+      - |
+        if ! command -v gem >/dev/null 2>&1; then
+          echo ">> Installing Ruby (gem) for cfn-nag"
+          if command -v apt-get >/dev/null 2>&1; then
+            apt-get update -y && apt-get install -y ruby-full build-essential || true
+          elif command -v yum >/dev/null 2>&1; then
+            yum install -y ruby rubygems || true
+          else
+            echo "No package manager found for Ruby; skipping cfn-nag install"
+          fi
+        fi
+      - |
+        if command -v gem >/dev/null 2>&1; then
+          echo ">> Installing cfn-nag"
+          gem install --no-document cfn-nag || true
+        fi
+
+      # ---- Install cfn-guard v2 (policy-as-code for CFN)
+      - |
+        echo ">> Installing cfn-guard"
+        GUARD_URL_BASE="https://github.com/aws-cloudformation/cloudformation-guard/releases"
+        if [ -n "${CFN_GUARD_VERSION}" ]; then
+          GUARD_TGZ="${GUARD_URL_BASE}/download/v${CFN_GUARD_VERSION}/cfn-guard-linux-x86_64.tar.gz"
+        else
+          GUARD_TGZ="${GUARD_URL_BASE}/latest/download/cfn-guard-linux-x86_64.tar.gz"
+        fi
+        mkdir -p /tmp/cfn-guard && cd /tmp/cfn-guard
+        (curl -sSL -o guard.tgz "${GUARD_TGZ}" && tar -xzf guard.tgz && mv cfn-guard /usr/local/bin/ ) || echo "cfn-guard install skipped"
+        cd - >/dev/null || true
+
+      - echo ">> Tooling versions (post-install)"
+      - cfn-lint --version || true
+      - cfn_nag_scan --version || true
+      - cfn-guard --version || true
+
+  pre_build:
+    commands:
+      - echo ">> Sanity check: required files exist (paths are case-sensitive)"
+      - test -f ${CFN_DIR}/stacks/networking.yml
+      - test -f ${CFN_DIR}/stacks/streams-events.yml
+      - test -f ${CFN_DIR}/envs/dev/networking-params.json
+      - test -f ${CFN_DIR}/envs/dev/streams-params.json
+
+  build:
+    commands:
+      - echo ">> Validate CloudFormation templates (server-side schema)"
+      - |
+        set +e
+        TEMPLATES=$(find "${CFN_DIR}/stacks" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \))
+        for t in ${TEMPLATES}; do
+          echo "  - aws cfn validate: $t"
+          aws cloudformation validate-template --template-body file://"$t" >/dev/null
+          if [ $? -ne 0 ]; then echo "::warning:: validate-template reported issues for $t"; fi
+        done
+        set -e
+
+      - echo ">> cfn-lint (non-blocking; warnings only)"
+      - |
+        for t in ${TEMPLATES}; do
+          echo "  - cfn-lint: $t"
+          cfn-lint "$t" || echo "::warning:: cfn-lint found issues in $t (non-blocking)"
+        done
+
+      - echo ">> cfn-nag (non-blocking security checks)"
+      - |
+        if command -v cfn_nag_scan >/dev/null 2>&1; then
+          for t in ${TEMPLATES}; do
+            echo "  - cfn-nag: $t"
+            cfn_nag_scan --input-path "$t" || echo "::warning:: cfn-nag findings in $t (non-blocking)"
+          done
+        else
+          echo "cfn-nag not installed; skipping"
+        fi
+
+      - echo ">> cfn-guard (non-blocking policy rules)"
+      - |
+        if command -v cfn-guard >/dev/null 2>&1 && [ -d "${RULES_DIR}" ]; then
+          # Validate each template against all rules in RULES_DIR
+          for t in ${TEMPLATES}; do
+            echo "  - cfn-guard validate: $t"
+            cfn-guard validate --rules "${RULES_DIR}" --data "$t" --type CFNTemplate || \
+              echo "::warning:: cfn-guard policy violations in $t (non-blocking)"
+          done
+        else
+          echo "cfn-guard or RULES_DIR missing; skipping policy validation"
+        fi
+
+      - echo ">> Repository tree (debug)"
+      - ls -R
+
+artifacts:
+  files:
+    - cloudformation/stacks/**/*.yml
+    - cloudformation/stacks/**/*.yaml
+    - cloudformation/envs/**/*.json
+    - cloudformation/rules/**/*.guard     # include your guard rules in artifacts (optional)
+  discard-paths: no
